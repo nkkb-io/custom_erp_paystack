@@ -1,0 +1,14 @@
+[project]
+name = "custom_erp_paystack"
+authors = [
+    { name = "Eusol Organics", email = "eusolghana@gmail.com"}
+]
+description = "Paystack payment gateway integration for ERPNext POS"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    "requests"
+]
+
+[tool.bench.dev-dependencies]
