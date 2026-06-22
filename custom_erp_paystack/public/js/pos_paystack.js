@@ -5,6 +5,14 @@ frappe.provide("custom_erp_paystack");
     var PAYSTACK_MODE = "paystack";
     var pollTimer = null;
 
+    function find_confirm_btn() {
+        var btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(function(b) {
+            var text = b.textContent.trim().toLowerCase();
+            return text === 'confirm' || text === 'complete order' || text === 'place order';
+        });
+    }
+
     function is_paystack_selected() {
         var selected = document.querySelector('.mode-of-payment.border-primary[data-mode]');
         return selected && selected.getAttribute('data-mode').toLowerCase() === PAYSTACK_MODE;
@@ -18,12 +26,12 @@ frappe.provide("custom_erp_paystack");
     }
 
     function intercept_complete_order() {
-        var btn = document.querySelector('.btn-complete-order, .complete-order-btn, button.btn-primary.complete-order');
+        var btn = find_confirm_btn();
         if (!btn || btn._paystack_hooked) return;
 
         btn._paystack_hooked = true;
         btn.addEventListener('click', function(e) {
-            if (!is_paystack_selected()) return; // let normal flow handle it
+            if (!is_paystack_selected()) return;
 
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -40,7 +48,7 @@ frappe.provide("custom_erp_paystack");
             get_customer_email(customer, function(email) {
                 start_paystack_flow(amount, email, invoice);
             });
-        }, true); // capture phase so we run before Vue
+        }, true);
     }
 
     function get_customer_email(customer, callback) {
@@ -75,27 +83,25 @@ frappe.provide("custom_erp_paystack");
 
     function show_payment_dialog(url, reference, invoice_name, amount) {
         var d = new frappe.ui.Dialog({
-            title: "Pay with Paystack — ₵" + amount,
+            title: "Pay with Paystack — \u20B5" + parseFloat(amount).toFixed(2),
             fields: [
                 {
                     fieldtype: "HTML",
                     fieldname: "pay_html",
-                    options: `
-                    <div style="text-align:center;padding:16px 8px;">
-                        <p style="font-size:13px;color:#1b3a2d;margin-bottom:12px;font-weight:500;">
-                            Ask the customer to scan the QR code or tap the link below to pay
-                        </p>
-                        <div id="ps-qr" style="margin:0 auto 16px;width:200px;height:200px;background:#f5f0e4;border-radius:8px;display:flex;align-items:center;justify-content:center;">
-                            <span style="font-size:12px;color:#888;">Loading QR...</span>
-                        </div>
-                        <a href="${url}" target="_blank"
-                           style="font-size:12px;color:#5a8a6a;word-break:break-all;display:block;margin-bottom:16px;">
-                           ${url}
-                        </a>
-                        <div id="ps-status" style="padding:10px;border-radius:8px;background:#f5f0e4;font-size:13px;font-weight:500;color:#854f0b;">
-                            ⏳ Waiting for payment...
-                        </div>
-                    </div>`
+                    options: '<div style="text-align:center;padding:16px 8px;">' +
+                        '<p style="font-size:13px;color:#1b3a2d;margin-bottom:12px;font-weight:500;">' +
+                        'Ask the customer to scan the QR code or tap the link to pay' +
+                        '</p>' +
+                        '<div id="ps-qr" style="margin:0 auto 16px;width:200px;height:200px;background:#f5f0e4;border-radius:8px;display:flex;align-items:center;justify-content:center;">' +
+                        '<span style="font-size:12px;color:#888;">Loading QR...</span>' +
+                        '</div>' +
+                        '<a href="' + url + '" target="_blank" ' +
+                        'style="font-size:12px;color:#5a8a6a;word-break:break-all;display:block;margin-bottom:16px;">' +
+                        url + '</a>' +
+                        '<div id="ps-status" style="padding:10px;border-radius:8px;background:#f5f0e4;font-size:13px;font-weight:500;color:#854f0b;">' +
+                        '\u23F3 Waiting for payment...' +
+                        '</div>' +
+                        '</div>'
                 }
             ],
             primary_action_label: "I've confirmed payment manually",
@@ -117,7 +123,8 @@ frappe.provide("custom_erp_paystack");
             var qrEl = document.getElementById("ps-qr");
             if (qrEl) {
                 qrEl.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' +
-                    encodeURIComponent(url) + '" style="width:200px;height:200px;border-radius:6px;" />';
+                    encodeURIComponent(url) +
+                    '" style="width:200px;height:200px;border-radius:6px;" />';
             }
         }, 200);
 
@@ -131,7 +138,7 @@ frappe.provide("custom_erp_paystack");
                         clearInterval(pollTimer);
                         var statusEl = document.getElementById("ps-status");
                         if (statusEl) {
-                            statusEl.textContent = "✅ Payment confirmed!";
+                            statusEl.textContent = "\u2705 Payment confirmed!";
                             statusEl.style.background = "#eaf3de";
                             statusEl.style.color = "#3b6d11";
                         }
@@ -148,18 +155,15 @@ frappe.provide("custom_erp_paystack");
     }
 
     function complete_pos_order() {
-        // Programmatically click the complete order button without our intercept
-        var btn = document.querySelector('.btn-complete-order, .complete-order-btn, button.btn-primary.complete-order');
+        var btn = find_confirm_btn();
         if (btn) {
-            btn._paystack_hooked = false; // temporarily remove our hook
+            btn._paystack_hooked = false;
             btn.click();
             setTimeout(function() { btn._paystack_hooked = true; }, 1000);
-        } else if (cur_pos && cur_pos.submit_invoice) {
-            cur_pos.submit_invoice();
         }
     }
 
-    // Watch for the Complete Order button to appear
+    // Watch for the Confirm button to appear in the DOM
     var observer = new MutationObserver(function() {
         intercept_complete_order();
     });
