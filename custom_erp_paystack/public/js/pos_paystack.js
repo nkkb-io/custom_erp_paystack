@@ -5,50 +5,15 @@ frappe.provide("custom_erp_paystack");
     var PAYSTACK_MODE = "paystack";
     var pollTimer = null;
 
-    function find_confirm_btn() {
-        var btns = Array.from(document.querySelectorAll('button'));
-        return btns.find(function(b) {
-            var text = b.textContent.trim().toLowerCase();
-            return text === 'confirm' || text === 'complete order' || text === 'place order';
-        });
-    }
-
     function is_paystack_selected() {
         var selected = document.querySelector('.mode-of-payment.border-primary[data-mode]');
         return selected && selected.getAttribute('data-mode').toLowerCase() === PAYSTACK_MODE;
     }
 
     function get_paystack_amount() {
-        var amountEl = document.querySelector('[data-mode="paystack"] .pay-amount');
+        var amountEl = document.querySelector('[data-mode="' + PAYSTACK_MODE + '"] .pay-amount');
         if (!amountEl) return 0;
-        var text = amountEl.textContent.replace(/[^0-9.]/g, '');
-        return parseFloat(text) || 0;
-    }
-
-    function intercept_complete_order() {
-        var btn = find_confirm_btn();
-        if (!btn || btn._paystack_hooked) return;
-
-        btn._paystack_hooked = true;
-        btn.addEventListener('click', function(e) {
-            if (!is_paystack_selected()) return;
-
-            e.preventDefault();
-            e.stopImmediatePropagation();
-
-            var amount = get_paystack_amount();
-            var invoice = cur_pos && cur_pos.frm && cur_pos.frm.doc && cur_pos.frm.doc.name;
-            var customer = cur_pos && cur_pos.frm && cur_pos.frm.doc && cur_pos.frm.doc.customer;
-
-            if (!amount || !invoice) {
-                frappe.msgprint("Could not get invoice details. Please try again.");
-                return;
-            }
-
-            get_customer_email(customer, function(email) {
-                start_paystack_flow(amount, email, invoice);
-            });
-        }, true);
+        return parseFloat(amountEl.textContent.replace(/[^0-9.]/g, '')) || 0;
     }
 
     function get_customer_email(customer, callback) {
@@ -58,7 +23,7 @@ frappe.provide("custom_erp_paystack");
         });
     }
 
-    function start_paystack_flow(amount, email, invoice_name) {
+    function start_paystack_flow(amount, email, invoice_name, on_success) {
         var reference = "EO-" + invoice_name.replace(/[^a-zA-Z0-9]/g, '') + "-" + Date.now();
 
         frappe.call({
@@ -73,42 +38,32 @@ frappe.provide("custom_erp_paystack");
             freeze_message: "Generating Paystack payment link...",
             callback: function(r) {
                 if (r.message && r.message.authorization_url) {
-                    show_payment_dialog(r.message.authorization_url, reference, invoice_name, amount);
+                    show_payment_dialog(r.message.authorization_url, reference, amount, on_success);
                 } else {
-                    frappe.msgprint("Failed to generate Paystack payment link.");
+                    frappe.msgprint("Failed to generate Paystack payment link. Please try again.");
                 }
             }
         });
     }
 
-    function show_payment_dialog(url, reference, invoice_name, amount) {
+    function show_payment_dialog(url, reference, amount, on_success) {
         var d = new frappe.ui.Dialog({
-            title: "Pay with Paystack — \u20B5" + parseFloat(amount).toFixed(2),
-            fields: [
-                {
-                    fieldtype: "HTML",
-                    fieldname: "pay_html",
-                    options: '<div style="text-align:center;padding:16px 8px;">' +
-                        '<p style="font-size:13px;color:#1b3a2d;margin-bottom:12px;font-weight:500;">' +
-                        'Ask the customer to scan the QR code or tap the link to pay' +
-                        '</p>' +
-                        '<div id="ps-qr" style="margin:0 auto 16px;width:200px;height:200px;background:#f5f0e4;border-radius:8px;display:flex;align-items:center;justify-content:center;">' +
-                        '<span style="font-size:12px;color:#888;">Loading QR...</span>' +
-                        '</div>' +
-                        '<a href="' + url + '" target="_blank" ' +
-                        'style="font-size:12px;color:#5a8a6a;word-break:break-all;display:block;margin-bottom:16px;">' +
-                        url + '</a>' +
-                        '<div id="ps-status" style="padding:10px;border-radius:8px;background:#f5f0e4;font-size:13px;font-weight:500;color:#854f0b;">' +
-                        '\u23F3 Waiting for payment...' +
-                        '</div>' +
-                        '</div>'
-                }
-            ],
-            primary_action_label: "I've confirmed payment manually",
+            title: "Pay with Paystack \u2014 \u20B5" + parseFloat(amount).toFixed(2),
+            fields: [{
+                fieldtype: "HTML",
+                fieldname: "pay_html",
+                options: '<div style="text-align:center;padding:16px 8px;">' +
+                    '<p style="font-size:13px;color:#1b3a2d;margin-bottom:12px;font-weight:500;">Ask the customer to scan the QR code or open the link below to pay.</p>' +
+                    '<div id="ps-qr" style="margin:0 auto 16px;width:200px;height:200px;background:#f5f0e4;border-radius:8px;display:flex;align-items:center;justify-content:center;"><span style="font-size:12px;color:#888;">Loading QR...</span></div>' +
+                    '<a href="' + url + '" target="_blank" style="font-size:12px;color:#5a8a6a;word-break:break-all;display:block;margin-bottom:16px;">' + url + '</a>' +
+                    '<div id="ps-status" style="padding:10px;border-radius:8px;background:#f5f0e4;font-size:13px;font-weight:500;color:#854f0b;">\u23F3 Waiting for payment...</div>' +
+                    '</div>'
+            }],
+            primary_action_label: "Confirm payment manually",
             primary_action: function() {
                 clearInterval(pollTimer);
                 d.hide();
-                complete_pos_order();
+                on_success();
             },
             secondary_action_label: "Cancel",
             secondary_action: function() {
@@ -118,17 +73,14 @@ frappe.provide("custom_erp_paystack");
         });
         d.show();
 
-        // Render QR code
         setTimeout(function() {
             var qrEl = document.getElementById("ps-qr");
             if (qrEl) {
                 qrEl.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' +
-                    encodeURIComponent(url) +
-                    '" style="width:200px;height:200px;border-radius:6px;" />';
+                    encodeURIComponent(url) + '" style="width:200px;height:200px;border-radius:6px;" />';
             }
         }, 200);
 
-        // Poll every 5 seconds for payment confirmation
         pollTimer = setInterval(function() {
             frappe.call({
                 method: "custom_erp_paystack.api.verify_payment",
@@ -136,16 +88,13 @@ frappe.provide("custom_erp_paystack");
                 callback: function(r) {
                     if (r.message && r.message.status === "success") {
                         clearInterval(pollTimer);
-                        var statusEl = document.getElementById("ps-status");
-                        if (statusEl) {
-                            statusEl.textContent = "\u2705 Payment confirmed!";
-                            statusEl.style.background = "#eaf3de";
-                            statusEl.style.color = "#3b6d11";
+                        var el = document.getElementById("ps-status");
+                        if (el) {
+                            el.textContent = "\u2705 Payment confirmed!";
+                            el.style.background = "#eaf3de";
+                            el.style.color = "#3b6d11";
                         }
-                        setTimeout(function() {
-                            d.hide();
-                            complete_pos_order();
-                        }, 1500);
+                        setTimeout(function() { d.hide(); on_success(); }, 1500);
                     }
                 }
             });
@@ -154,22 +103,49 @@ frappe.provide("custom_erp_paystack");
         d.onhide = function() { clearInterval(pollTimer); };
     }
 
-    function complete_pos_order() {
-        var btn = find_confirm_btn();
-        if (btn) {
-            btn._paystack_hooked = false;
-            btn.click();
-            setTimeout(function() { btn._paystack_hooked = true; }, 1000);
+    // Override frappe.call to intercept POS submit_invoice
+    var _original_call = frappe.call.bind(frappe);
+    frappe.call = function(opts) {
+        var method = (typeof opts === 'object') ? opts.method : opts;
+
+        // Intercept POS invoice submission
+        if (method && (
+            method.indexOf('make_payment_via_payment_order') !== -1 ||
+            method.indexOf('submit_invoice') !== -1 ||
+            method.indexOf('pos_invoice') !== -1 ||
+            method.indexOf('create_payment_request') !== -1
+        )) {
+            if (is_paystack_selected()) {
+                var amount = get_paystack_amount();
+                var doc = cur_pos && cur_pos.frm && cur_pos.frm.doc;
+                var invoice_name = doc && doc.name;
+                var customer = doc && doc.customer;
+
+                if (amount && invoice_name) {
+                    get_customer_email(customer, function(email) {
+                        start_paystack_flow(amount, email, invoice_name, function() {
+                            _original_call(opts);
+                        });
+                    });
+                    return;
+                }
+            }
         }
-    }
 
-    // Watch for the Confirm button to appear in the DOM
-    var observer = new MutationObserver(function() {
-        intercept_complete_order();
-    });
+        return _original_call(opts);
+    };
 
-    frappe.ready(function() {
-        observer.observe(document.body, { childList: true, subtree: true });
+    // Also try direct Vue component override after POS loads
+    frappe.after_ajax(function() {
+        setTimeout(function() {
+            try {
+                // Try to hook into the POS Vue instance's submit method
+                var posApp = document.querySelector('#app').__vue_app__;
+                if (posApp) {
+                    console.log("POS Vue app found - Paystack integration active");
+                }
+            } catch(e) {}
+        }, 2000);
     });
 
 })();
