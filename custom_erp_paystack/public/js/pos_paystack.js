@@ -1,15 +1,22 @@
 // ── Eusol Organics — Paystack POS Integration ──
-// Triggers Paystack for MoMo and Card payments, leaves Cash alone
 frappe.provide("custom_erp_paystack");
 
 (function() {
-    var PAYSTACK_MODES = ["mobile money (momo)", "mobile money", "momo", "card", "bank transfer"];
+    var PAYSTACK_MODES = ["paystack", "mobile money", "momo", "card"];
     var pollTimer = null;
-    var paystack_btn_added = false;
 
     function get_selected_mode() {
-        var el = document.querySelector('.mode-of-payment.border-primary[data-mode]');
-        return el ? el.getAttribute('data-mode').toLowerCase() : null;
+        // Try different selectors for selected payment mode
+        var el = document.querySelector('.mode-of-payment.border-primary[data-mode]') ||
+                 document.querySelector('.mode-of-payment.selected[data-mode]') ||
+                 document.querySelector('.mode-of-payment.active[data-mode]');
+        if (el) return el.getAttribute('data-mode').toLowerCase();
+
+        // If only one payment mode exists, it's selected by default
+        var all = document.querySelectorAll('.mode-of-payment[data-mode]');
+        if (all.length === 1) return all[0].getAttribute('data-mode').toLowerCase();
+
+        return null;
     }
 
     function is_paystack_mode() {
@@ -19,22 +26,23 @@ frappe.provide("custom_erp_paystack");
     }
 
     function get_amount() {
-        var el = document.querySelector('.mode-of-payment.border-primary .pay-amount');
-        if (!el) {
-            el = document.querySelector('.grand-total-value, .grand-total');
-        }
+        // Try multiple selectors for the amount
+        var el = document.querySelector('.pay-amount') ||
+                 document.querySelector('.grand-total-value') ||
+                 document.querySelector('.grand-total');
         if (!el) return 0;
         return parseFloat(el.textContent.replace(/[^0-9.]/g, '')) || 0;
     }
 
-    function get_confirm_btn() {
+    function get_complete_btn() {
         return Array.from(document.querySelectorAll('button')).find(function(b) {
-            return b.textContent.trim().toLowerCase() === 'confirm';
+            var text = b.textContent.trim().toLowerCase();
+            return text === 'complete order' || text === 'confirm' || text === 'place order';
         });
     }
 
-    function disable_confirm() {
-        var btn = get_confirm_btn();
+    function disable_complete_btn() {
+        var btn = get_complete_btn();
         if (btn) {
             btn.disabled = true;
             btn.style.opacity = '0.4';
@@ -43,8 +51,8 @@ frappe.provide("custom_erp_paystack");
         }
     }
 
-    function enable_confirm() {
-        var btn = get_confirm_btn();
+    function enable_complete_btn() {
+        var btn = get_complete_btn();
         if (btn) {
             btn.disabled = false;
             btn.style.opacity = '1';
@@ -55,15 +63,27 @@ frappe.provide("custom_erp_paystack");
 
     function add_paystack_btn() {
         if (document.getElementById('ps-pay-btn')) return;
-
-        var confirm_btn = get_confirm_btn();
-        if (!confirm_btn) return;
+        var complete_btn = get_complete_btn();
+        if (!complete_btn) return;
 
         var btn = document.createElement('button');
         btn.id = 'ps-pay-btn';
-        btn.className = 'btn btn-sm btn-primary';
-        btn.style.cssText = 'width:100%;margin-bottom:8px;background:#1b3a2d;border-color:#1b3a2d;font-family:DM Sans,sans-serif;';
+        btn.className = 'btn btn-sm';
+        btn.style.cssText = [
+            'width:100%',
+            'margin-bottom:8px',
+            'background:#1b3a2d',
+            'border:none',
+            'color:#fff',
+            'padding:12px',
+            'border-radius:8px',
+            'font-size:14px',
+            'font-weight:500',
+            'cursor:pointer',
+            'font-family:DM Sans,sans-serif'
+        ].join(';');
         btn.textContent = 'Pay via Paystack';
+
         btn.onclick = function(e) {
             e.preventDefault();
             var doc = cur_pos && cur_pos.frm && cur_pos.frm.doc;
@@ -72,7 +92,7 @@ frappe.provide("custom_erp_paystack");
             var amount = get_amount();
 
             if (!amount || !invoice_name) {
-                frappe.msgprint("Could not get invoice details.");
+                frappe.msgprint("Could not get invoice details. Please try again.");
                 return;
             }
 
@@ -81,14 +101,14 @@ frappe.provide("custom_erp_paystack");
             });
         };
 
-        confirm_btn.parentNode.insertBefore(btn, confirm_btn);
-        disable_confirm();
+        complete_btn.parentNode.insertBefore(btn, complete_btn);
+        disable_complete_btn();
     }
 
     function remove_paystack_btn() {
         var btn = document.getElementById('ps-pay-btn');
         if (btn) btn.remove();
-        enable_confirm();
+        enable_complete_btn();
     }
 
     function get_customer_email(customer, callback) {
@@ -130,7 +150,7 @@ frappe.provide("custom_erp_paystack");
                 options:
                     '<div style="text-align:center;padding:16px 8px;">' +
                     '<p style="font-size:13px;color:#1b3a2d;margin-bottom:12px;font-weight:500;">' +
-                    'Ask the customer to scan the QR code or open the link to pay.' +
+                    'Ask the customer to scan the QR code or open the link below to pay.' +
                     '</p>' +
                     '<div id="ps-qr" style="margin:0 auto 16px;width:200px;height:200px;' +
                     'background:#f5f0e4;border-radius:8px;display:flex;align-items:center;justify-content:center;">' +
@@ -195,33 +215,21 @@ frappe.provide("custom_erp_paystack");
     }
 
     function on_payment_confirmed() {
-        // Remove our button and enable + auto-click Confirm
         remove_paystack_btn();
         setTimeout(function() {
-            var btn = get_confirm_btn();
+            var btn = get_complete_btn();
             if (btn) btn.click();
         }, 300);
     }
 
-    // Watch for payment mode changes and checkout screen
-    var last_mode = null;
+    // Watch DOM for payment screen and mode changes
     var observer = new MutationObserver(function() {
-        var mode = get_selected_mode();
+        var complete_btn = get_complete_btn();
+        var ps_btn = document.getElementById('ps-pay-btn');
 
-        // Payment mode changed
-        if (mode !== last_mode) {
-            last_mode = mode;
-            if (is_paystack_mode()) {
-                add_paystack_btn();
-            } else {
-                remove_paystack_btn();
-            }
-        }
-
-        // Also check if paystack button needs to be added/removed
-        if (is_paystack_mode() && get_confirm_btn() && !document.getElementById('ps-pay-btn')) {
+        if (complete_btn && is_paystack_mode() && !ps_btn) {
             add_paystack_btn();
-        } else if (!is_paystack_mode() && document.getElementById('ps-pay-btn')) {
+        } else if (complete_btn && !is_paystack_mode() && ps_btn) {
             remove_paystack_btn();
         }
     });
@@ -230,4 +238,4 @@ frappe.provide("custom_erp_paystack");
         observer.observe(document.body, { childList: true, subtree: true });
     });
 
-})();
+})(); 
